@@ -213,6 +213,7 @@ export default function App() {
             onChange={handleNotesChange}
             placeholder="Write your end-of-day notes here…"
             rows={13}
+            spellCheck={true}
           />
         </div>
 

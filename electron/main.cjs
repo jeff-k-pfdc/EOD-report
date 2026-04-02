@@ -12,7 +12,7 @@
  * then dynamically imports the ESM server module at runtime.
  */
 
-const { app, BrowserWindow, shell } = require('electron')
+const { app, BrowserWindow, shell, Menu } = require('electron')
 const path  = require('path')
 const http  = require('http')
 const dotenv = require('dotenv')
@@ -36,11 +36,30 @@ function createWindow(url) {
     webPreferences: {
       nodeIntegration: false,   // never expose Node.js to the renderer
       contextIsolation: true,
+      spellcheck: true,
     },
     show: false, // show only after content has loaded (avoids flash)
   })
 
   mainWindow.loadURL(url)
+
+  // Spell-check context menu: show suggestions on right-click over misspelled words
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    if (!params.misspelledWord) return
+    const suggestions = params.dictionarySuggestions
+    const menu = Menu.buildFromTemplate([
+      ...suggestions.map(word => ({
+        label: word,
+        click: () => mainWindow.webContents.replaceMisspelling(word),
+      })),
+      ...(suggestions.length ? [{ type: 'separator' }] : []),
+      {
+        label: `Add "${params.misspelledWord}" to dictionary`,
+        click: () => mainWindow.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord),
+      },
+    ])
+    menu.popup()
+  })
 
   // Reveal the window once it is ready to paint
   mainWindow.once('ready-to-show', () => {
