@@ -1,4 +1,5 @@
 import express from 'express'
+import { randomBytes } from 'crypto'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { config as loadEnv } from 'dotenv'
@@ -14,16 +15,45 @@ loadEnv({ path: join(__dirname, '..', '.env') })
 const app  = express()
 const PORT = process.env.PORT || 3001
 
+const APP_PASSWORD  = process.env.APP_PASSWORD || ''
+const SESSION_TOKEN = randomBytes(32).toString('hex')
+
 app.use(express.json())
 
-// Serve compiled frontend in all modes except Vite dev
-if (process.env.NODE_ENV !== 'development') {
-  const dist = join(__dirname, '..', 'dist')
-  app.use(express.static(dist))
-  app.get('*', (_req, res) => res.sendFile(join(dist, 'index.html')))
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+function requireAuth(req, res, next) {
+  if (!APP_PASSWORD) return next()
+  const auth = req.headers['authorization'] || ''
+  if (auth === `Bearer ${SESSION_TOKEN}`) return next()
+  res.status(401).json({ error: 'Unauthorized' })
 }
 
-// Draft
+// Protect all /api/* except /api/login and /api/auth-check
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next()
+  if (req.path === '/api/login' || req.path === '/api/auth-check') return next()
+  requireAuth(req, res, next)
+})
+
+app.get('/api/auth-check', (req, res) => {
+  if (!APP_PASSWORD) return res.json({ required: false })
+  const auth = req.headers['authorization'] || ''
+  res.json({ required: true, valid: auth === `Bearer ${SESSION_TOKEN}` })
+})
+
+app.post('/api/login', (req, res) => {
+  if (!APP_PASSWORD) return res.json({ token: null, required: false })
+  const { password } = req.body
+  if (password === APP_PASSWORD) {
+    res.json({ token: SESSION_TOKEN })
+  } else {
+    res.status(401).json({ error: 'Incorrect password.' })
+  }
+})
+
+// ── Draft ─────────────────────────────────────────────────────────────────────
+
 app.get('/api/draft', (_req, res) => res.json(storage.getDraft() ?? {}))
 
 app.post('/api/draft', (req, res) => {
@@ -36,7 +66,8 @@ app.post('/api/draft', (req, res) => {
 
 app.delete('/api/draft', (_req, res) => { storage.clearDraft(); res.json({ ok: true }) })
 
-// History
+// ── History ───────────────────────────────────────────────────────────────────
+
 app.get('/api/history', (_req, res) => res.json(storage.getHistory()))
 
 app.delete('/api/history/:index', (req, res) => {
@@ -49,7 +80,8 @@ app.delete('/api/history/:index', (req, res) => {
   res.json({ ok: true })
 })
 
-// Submit
+// ── Submit ────────────────────────────────────────────────────────────────────
+
 app.post('/api/submit', async (req, res) => {
   const { date, notes } = req.body
   if (!notes?.trim()) return res.status(400).json({ error: 'Notes cannot be empty.' })
@@ -67,7 +99,8 @@ app.post('/api/submit', async (req, res) => {
   }
 })
 
-// Settings
+// ── Settings ──────────────────────────────────────────────────────────────────
+
 app.get('/api/settings', (_req, res) => res.json(storage.getSettings()))
 
 app.post('/api/settings', (req, res) => {
@@ -79,12 +112,23 @@ app.post('/api/settings', (req, res) => {
   res.json({ ok: true })
 })
 
-// Start
+// ── Static ────────────────────────────────────────────────────────────────────
+
+// Serve compiled frontend in all modes except Vite dev
+if (process.env.NODE_ENV !== 'development') {
+  const dist = join(__dirname, '..', 'dist')
+  app.use(express.static(dist))
+  app.get('*', (_req, res) => res.sendFile(join(dist, 'index.html')))
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+
 export function startServer(port = PORT) {
   return new Promise((resolve, reject) => {
     const server = app.listen(port, () => {
       console.log(`✓ EOD server → http://localhost:${port}`)
       if (!process.env.TELEGRAM_BOT_TOKEN) console.warn('⚠  TELEGRAM_BOT_TOKEN not set.')
+      if (APP_PASSWORD) console.log('✓ Login enabled.')
       scheduleAutoSend()
       resolve(port)
     })

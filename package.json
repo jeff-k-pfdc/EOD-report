@@ -7,8 +7,9 @@
     "dev": "cross-env NODE_ENV=development concurrently -k \"node server/server.js\" \"vite --port 5173\"",
     "build": "vite build",
     "electron": "npm run build && electron .",
-    "electron-package": "npm run build && electron-builder",
-    "server": "node server/server.js"
+    "electron-package": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
+    "server": "node server/server.js",
+    "create-shortcut": "powershell -ExecutionPolicy Bypass -File create-shortcut.ps1"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
@@ -30,6 +31,6 @@
     "productName": "EOD Summary",
     "directories": { "output": "release" },
     "files": ["dist/**/*", "server/**/*", "electron/**/*", "node_modules/**/*", ".env"],
-    "win": { "target": "portable" }
+    "win": { "target": "dir" }
   }
 }

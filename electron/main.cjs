@@ -112,6 +112,9 @@ function waitForServer(port, maxAttempts = 30) {
 
 app.whenReady().then(async () => {
   try {
+    // Store data in AppData\Roaming\EOD Summary so it survives app updates/reinstalls
+    process.env.EOD_DATA_DIR = app.getPath('userData')
+
     // Dynamically import the ESM Express server and start it
     const { startServer } = await import('../server/server.js')
     await startServer(PORT)

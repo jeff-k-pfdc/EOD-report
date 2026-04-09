@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const DATA_DIR  = join(__dirname, '..', 'data')
+const DATA_DIR  = process.env.EOD_DATA_DIR || join(__dirname, '..', 'data')
 
 const DRAFT_FILE    = join(DATA_DIR, 'draft.json')
 const HISTORY_FILE  = join(DATA_DIR, 'history.json')
