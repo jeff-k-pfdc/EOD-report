@@ -5,11 +5,10 @@ function buildMessage(date, notes) {
   const dateStr = new Date(year, month - 1, day).toLocaleDateString('en-US', {
     month: 'long', day: 'numeric', year: 'numeric',
   })
-  const escaped = notes.trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  return `<b><u>EOD Summary - ${dateStr}</u></b>\n\n${escaped}`
+  return `<b><u>EOD Summary - ${dateStr}</u></b>\n\n${notes.trim()}`
 }
 
-export function sendToTelegram(date, notes) {
+function attemptSend(date, notes) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
       chat_id:    process.env.TELEGRAM_CHAT_ID,
@@ -38,4 +37,22 @@ export function sendToTelegram(date, notes) {
     req.write(body)
     req.end()
   })
+}
+
+export async function sendToTelegram(date, notes, maxAttempts = 3) {
+  let lastError
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await attemptSend(date, notes)
+    } catch (err) {
+      lastError = err
+      // Don't retry on Telegram API errors (bad token, wrong chat, etc.) — only network failures
+      if (!err.message.startsWith('Network error')) throw err
+      if (attempt < maxAttempts) {
+        console.warn(`[Telegram] Attempt ${attempt} failed, retrying in ${attempt}s…`)
+        await new Promise(r => setTimeout(r, attempt * 1000))
+      }
+    }
+  }
+  throw lastError
 }
