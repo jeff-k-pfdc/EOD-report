@@ -31,6 +31,60 @@ function useDebounced(fn, delay) {
   }, [fn, delay])
 }
 
+// ─── Formatting toolbar ───────────────────────────────────────────────────────
+
+const FORMATS = [
+  { label: 'B',       title: 'Bold',          tag: 'b',           style: { fontWeight: 'bold' } },
+  { label: 'I',       title: 'Italic',        tag: 'i',           style: { fontStyle: 'italic' } },
+  { label: 'U',       title: 'Underline',     tag: 'u',           style: { textDecoration: 'underline' } },
+  { label: 'S',       title: 'Strikethrough', tag: 's',           style: { textDecoration: 'line-through' } },
+  { label: 'code',    title: 'Inline code',   tag: 'code',        style: { fontFamily: 'monospace' } },
+  { label: 'pre',     title: 'Code block',    tag: 'pre',         style: { fontFamily: 'monospace' } },
+  { label: '||',      title: 'Spoiler',       tag: 'tg-spoiler',  style: {} },
+  { label: '❝',       title: 'Blockquote',    tag: 'blockquote',  style: {} },
+]
+
+function FormatToolbar({ textareaRef, value, onChange }) {
+  function applyFormat(tag) {
+    const el = textareaRef.current
+    if (!el) return
+    const start = el.selectionStart
+    const end   = el.selectionEnd
+    const selected = value.slice(start, end)
+    const open  = `<${tag}>`
+    const close = `</${tag}>`
+    // If already wrapped, unwrap
+    if (value.slice(start - open.length, start) === open &&
+        value.slice(end, end + close.length) === close) {
+      const next = value.slice(0, start - open.length) + selected + value.slice(end + close.length)
+      onChange(next)
+      setTimeout(() => { el.selectionStart = start - open.length; el.selectionEnd = end - open.length }, 0)
+      return
+    }
+    const next = value.slice(0, start) + open + selected + close + value.slice(end)
+    onChange(next)
+    setTimeout(() => {
+      el.selectionStart = start + open.length
+      el.selectionEnd   = end   + open.length
+    }, 0)
+  }
+
+  return (
+    <div className="format-toolbar">
+      {FORMATS.map(({ label, title, tag, style }) => (
+        <button
+          key={tag}
+          type="button"
+          className="fmt-btn"
+          title={title}
+          style={style}
+          onMouseDown={e => { e.preventDefault(); applyFormat(tag) }}
+        >{label}</button>
+      ))}
+    </div>
+  )
+}
+
 // Authenticated fetch — reads token from sessionStorage on every call
 function apiFetch(url, opts = {}) {
   const token = sessionStorage.getItem('eod_token') || ''
@@ -116,6 +170,12 @@ export default function App() {
       .catch(() => setAuthState('authenticated'))
   }, [])
 
+  // ── Refs ─────────────────────────────────────────────────────────────────────
+  const textareaRef = useRef(null)
+
+  // ── Preview state ────────────────────────────────────────────────────────────
+  const [previewMode, setPreviewMode] = useState(false)
+
   // ── Editor state ────────────────────────────────────────────────────────────
   const [date, setDate]               = useState(todayString())
   const [notes, setNotes]             = useState('')
@@ -167,6 +227,19 @@ export default function App() {
 
   const handleDateChange  = e => { setDate(e.target.value);  debouncedSave(e.target.value, notes) }
   const handleNotesChange = e => { setNotes(e.target.value); debouncedSave(date, e.target.value) }
+
+  // Tab key inserts two spaces instead of moving focus
+  const handleNotesKeyDown = e => {
+    if (e.key !== 'Tab') return
+    e.preventDefault()
+    const el    = e.target
+    const start = el.selectionStart
+    const end   = el.selectionEnd
+    const next  = notes.slice(0, start) + '  ' + notes.slice(end)
+    setNotes(next)
+    debouncedSave(date, next)
+    setTimeout(() => { el.selectionStart = el.selectionEnd = start + 2 }, 0)
+  }
 
   // ── Copy to clipboard ────────────────────────────────────────────────────────
   const handleCopy = async () => {
@@ -294,15 +367,42 @@ export default function App() {
 
         {/* ── Notes ────────────────────────────────────────────────────────── */}
         <div className="field">
-          <label htmlFor="notes">Notes</label>
-          <textarea
-            id="notes"
-            value={notes}
-            onChange={handleNotesChange}
-            placeholder="Write your end-of-day notes here…"
-            rows={13}
-            spellCheck={true}
-          />
+          <div className="notes-header">
+            <label htmlFor="notes">Notes</label>
+            <div className="preview-tabs">
+              <button
+                type="button"
+                className={`preview-tab${!previewMode ? ' active' : ''}`}
+                onClick={() => setPreviewMode(false)}
+              >Write</button>
+              <button
+                type="button"
+                className={`preview-tab${previewMode ? ' active' : ''}`}
+                onClick={() => setPreviewMode(true)}
+              >Preview</button>
+            </div>
+          </div>
+          <FormatToolbar textareaRef={textareaRef} value={notes} onChange={v => { setNotes(v); debouncedSave(date, v) }} />
+          {previewMode ? (
+            <div
+              className="tg-preview"
+              dangerouslySetInnerHTML={{ __html: notes.trim()
+                ? `<span class="tg-preview-header"><b><u>EOD Summary - ${formatDateDisplay(date)}</u></b></span>\n\n${notes}`
+                : '<span class="tg-preview-empty">Nothing to preview yet…</span>'
+              }}
+            />
+          ) : (
+            <textarea
+              id="notes"
+              ref={textareaRef}
+              value={notes}
+              onChange={handleNotesChange}
+              onKeyDown={handleNotesKeyDown}
+              placeholder="Write your end-of-day notes here…"
+              rows={13}
+              spellCheck={true}
+            />
+          )}
         </div>
 
         {/* ── Status ───────────────────────────────────────────────────────── */}
@@ -320,6 +420,11 @@ export default function App() {
           <button className="btn btn-ghost" onClick={handleCopy}>Copy</button>
           {justSubmitted && (
             <button className="btn btn-outline" onClick={handleClear}>Clear for next day</button>
+          )}
+          {status?.type === 'error' && !justSubmitted && (
+            <button className="btn btn-outline" onClick={handleSubmit} disabled={submitting}>
+              {submitting ? 'Retrying…' : 'Retry'}
+            </button>
           )}
           <button className="btn btn-primary" onClick={handleSubmit} disabled={submitting}>
             {submitting ? 'Sending…' : 'Submit EOD'}
