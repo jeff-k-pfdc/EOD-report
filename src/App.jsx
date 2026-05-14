@@ -14,7 +14,6 @@ function formatDateDisplay(dateStr) {
   })
 }
 
-// Formats "17:00" → "5:00 PM"
 function formatTime12h(timeStr) {
   if (!timeStr) return ''
   const [h, m] = timeStr.split(':').map(Number)
@@ -53,7 +52,6 @@ function FormatToolbar({ textareaRef, value, onChange }) {
     const selected = value.slice(start, end)
     const open  = `<${tag}>`
     const close = `</${tag}>`
-    // If already wrapped, unwrap
     if (value.slice(start - open.length, start) === open &&
         value.slice(end, end + close.length) === close) {
       const next = value.slice(0, start - open.length) + selected + value.slice(end + close.length)
@@ -152,7 +150,7 @@ function LoginScreen({ onAuthenticated }) {
 
 export default function App() {
   // ── Auth state ───────────────────────────────────────────────────────────────
-  const [authState, setAuthState] = useState('checking') // 'checking' | 'required' | 'authenticated'
+  const [authState, setAuthState] = useState('checking')
 
   useEffect(() => {
     const stored = sessionStorage.getItem('eod_token') || ''
@@ -171,18 +169,34 @@ export default function App() {
   }, [])
 
   // ── Refs ─────────────────────────────────────────────────────────────────────
-  const textareaRef = useRef(null)
+  const eodTextareaRef = useRef(null)
+  const checklistRef   = useRef([])
 
-  // ── Preview state ────────────────────────────────────────────────────────────
+  // ── Active tab ───────────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState('eod') // 'eod' | 'notes' | 'checklist'
+
+  // ── EOD preview state ────────────────────────────────────────────────────────
   const [previewMode, setPreviewMode] = useState(false)
 
-  // ── Editor state ────────────────────────────────────────────────────────────
+  // ── EOD state ────────────────────────────────────────────────────────────────
   const [date, setDate]               = useState(todayString())
-  const [notes, setNotes]             = useState('')
+  const [eodNotes, setEodNotes]       = useState('')
   const [status, setStatus]           = useState(null)
   const [submitting, setSubmitting]   = useState(false)
   const [lastSaved, setLastSaved]     = useState(null)
   const [justSubmitted, setJustSubmitted] = useState(false)
+  const [pendingDayChange, setPendingDayChange] = useState(null)
+
+  // ── Notes scratchpad state ───────────────────────────────────────────────────
+  const [personalNotes, setPersonalNotes] = useState('')
+
+  // ── Checklist state ──────────────────────────────────────────────────────────
+  const [checklist, setChecklist]         = useState([])
+  const [newItem, setNewItem]             = useState('')
+  const [justAddedToEod, setJustAddedToEod] = useState(new Set())
+
+  // Keep checklistRef in sync so saveDraft always uses the latest list
+  useEffect(() => { checklistRef.current = checklist }, [checklist])
 
   // ── History state ────────────────────────────────────────────────────────────
   const [history, setHistory]         = useState([])
@@ -199,7 +213,15 @@ export default function App() {
 
     apiFetch('/api/draft')
       .then(r => r.json())
-      .then(d => { if (d.date) setDate(d.date); if (d.notes) setNotes(d.notes) })
+      .then(d => {
+        if (d.date) setDate(d.date)
+        if (d.notes) setEodNotes(d.notes)
+        if (d.personalNotes) setPersonalNotes(d.personalNotes)
+        if (Array.isArray(d.checklist)) {
+          setChecklist(d.checklist)
+          checklistRef.current = d.checklist
+        }
+      })
       .catch(() => {})
 
     apiFetch('/api/history')
@@ -211,13 +233,28 @@ export default function App() {
       .catch(() => {})
   }, [authState])
 
+  // ── Wake / new-day detection via visibility change ───────────────────────────
+  useEffect(() => {
+    const lastDate = { current: todayString() }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return
+      const today = todayString()
+      if (today !== lastDate.current) {
+        setPendingDayChange(today)
+        lastDate.current = today
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
+
   // ── Auto-save draft ──────────────────────────────────────────────────────────
-  const saveDraft = useCallback(async (d, n) => {
+  const saveDraft = useCallback(async (d, n, pn) => {
     try {
       await apiFetch('/api/draft', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: d, notes: n }),
+        body: JSON.stringify({ date: d, notes: n, personalNotes: pn, checklist: checklistRef.current }),
       })
       setLastSaved(new Date())
     } catch {}
@@ -225,26 +262,77 @@ export default function App() {
 
   const debouncedSave = useDebounced(saveDraft, 1000)
 
-  const handleDateChange  = e => { setDate(e.target.value);  debouncedSave(e.target.value, notes) }
-  const handleNotesChange = e => { setNotes(e.target.value); debouncedSave(date, e.target.value) }
+  const handleDateChange      = e => { setDate(e.target.value);         debouncedSave(e.target.value, eodNotes, personalNotes) }
+  const handleEodNotesChange  = e => { setEodNotes(e.target.value);     debouncedSave(date, e.target.value, personalNotes) }
+  const handlePersonalNotesChange = e => { setPersonalNotes(e.target.value); debouncedSave(date, eodNotes, e.target.value) }
 
-  // Tab key inserts two spaces instead of moving focus
-  const handleNotesKeyDown = e => {
+  const handleEodNotesKeyDown = e => {
     if (e.key !== 'Tab') return
     e.preventDefault()
     const el    = e.target
     const start = el.selectionStart
     const end   = el.selectionEnd
-    const next  = notes.slice(0, start) + '  ' + notes.slice(end)
-    setNotes(next)
-    debouncedSave(date, next)
+    const next  = eodNotes.slice(0, start) + '  ' + eodNotes.slice(end)
+    setEodNotes(next)
+    debouncedSave(date, next, personalNotes)
     setTimeout(() => { el.selectionStart = el.selectionEnd = start + 2 }, 0)
+  }
+
+  // ── Checklist handlers ───────────────────────────────────────────────────────
+  const addChecklistItem = () => {
+    if (!newItem.trim()) return
+    const item = { id: Date.now().toString(), text: newItem.trim(), checked: false, detail: '' }
+    const next = [...checklist, item]
+    checklistRef.current = next
+    setChecklist(next)
+    setNewItem('')
+    debouncedSave(date, eodNotes, personalNotes)
+  }
+
+  const toggleChecklistItem = (id) => {
+    const next = checklist.map(item => item.id === id ? { ...item, checked: !item.checked } : item)
+    checklistRef.current = next
+    setChecklist(next)
+    debouncedSave(date, eodNotes, personalNotes)
+  }
+
+  const deleteChecklistItem = (id) => {
+    const next = checklist.filter(item => item.id !== id)
+    checklistRef.current = next
+    setChecklist(next)
+    debouncedSave(date, eodNotes, personalNotes)
+  }
+
+  const updateChecklistItemText = (id, text) => {
+    const next = checklist.map(item => item.id === id ? { ...item, text } : item)
+    checklistRef.current = next
+    setChecklist(next)
+    debouncedSave(date, eodNotes, personalNotes)
+  }
+
+  const updateChecklistItemDetail = (id, detail) => {
+    const next = checklist.map(item => item.id === id ? { ...item, detail } : item)
+    checklistRef.current = next
+    setChecklist(next)
+    debouncedSave(date, eodNotes, personalNotes)
+  }
+
+  const addToEod = (item) => {
+    const detail = (item.detail || '').trim()
+    const entry = detail ? `- ${item.text}\n  ${detail}` : `- ${item.text}`
+    const newNotes = eodNotes.trim() ? eodNotes + '\n' + entry : entry
+    setEodNotes(newNotes)
+    debouncedSave(date, newNotes, personalNotes)
+    setJustAddedToEod(prev => new Set([...prev, item.id]))
+    setTimeout(() => {
+      setJustAddedToEod(prev => { const next = new Set(prev); next.delete(item.id); return next })
+    }, 2500)
   }
 
   // ── Copy to clipboard ────────────────────────────────────────────────────────
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(`EOD Summary - ${formatDateDisplay(date)}\n\n${notes}`)
+      await navigator.clipboard.writeText(`EOD Summary - ${formatDateDisplay(date)}\n\n${eodNotes}`)
       setStatus({ type: 'info', message: 'Copied to clipboard.' })
       setTimeout(() => setStatus(null), 2000)
     } catch {
@@ -254,7 +342,7 @@ export default function App() {
 
   // ── Submit EOD ───────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    if (!notes.trim()) {
+    if (!eodNotes.trim()) {
       setStatus({ type: 'error', message: 'Please write something before submitting.' })
       return
     }
@@ -264,7 +352,7 @@ export default function App() {
       const res  = await apiFetch('/api/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date, notes }),
+        body: JSON.stringify({ date, notes: eodNotes }),
       })
       const data = await res.json()
       if (res.ok) {
@@ -283,8 +371,21 @@ export default function App() {
 
   // ── Clear form ───────────────────────────────────────────────────────────────
   const handleClear = async () => {
-    setNotes(''); setDate(todayString()); setStatus(null); setJustSubmitted(false)
+    setEodNotes('')
+    setDate(todayString())
+    setChecklist([])
+    checklistRef.current = []
+    setStatus(null)
+    setJustSubmitted(false)
     await apiFetch('/api/draft', { method: 'DELETE' }).catch(() => {})
+  }
+
+  // ── Accept new day from wake banner ─────────────────────────────────────────
+  const handleAcceptNewDay = () => {
+    if (!pendingDayChange) return
+    setDate(pendingDayChange)
+    debouncedSave(pendingDayChange, eodNotes, personalNotes)
+    setPendingDayChange(null)
   }
 
   // ── Delete a history entry ───────────────────────────────────────────────────
@@ -319,6 +420,8 @@ export default function App() {
     return <LoginScreen onAuthenticated={() => setAuthState('authenticated')} />
   }
 
+  const pendingItems = checklist.filter(i => !i.checked).length
+
   return (
     <div className="app">
       <header className="app-header">
@@ -330,145 +433,271 @@ export default function App() {
 
       <main className="app-main">
 
-        {/* ── Date field ────────────────────────────────────────────────────── */}
-        <div className="field field-date">
-          <label htmlFor="date">Date</label>
-          <input type="date" id="date" value={date} onChange={handleDateChange} />
-        </div>
-
-        {/* ── Auto-send row ─────────────────────────────────────────────────── */}
-        <div className="autosend-row">
-          <label className="toggle-label">
-            <input
-              type="checkbox"
-              checked={autoEnabled}
-              onChange={e => setAutoEnabled(e.target.checked)}
-            />
-            <span className="toggle-track"><span className="toggle-thumb" /></span>
-            <span className="toggle-text">Auto-send</span>
-          </label>
-          <input
-            type="time"
-            className="time-input"
-            value={autoTime}
-            onChange={e => setAutoTime(e.target.value)}
-            disabled={!autoEnabled}
-          />
-          <button className="btn btn-ghost btn-sm" onClick={handleSaveSettings}>
-            {settingsSaved ? 'Saved ✓' : 'Save'}
-          </button>
-        </div>
-
-        {autoEnabled && (
-          <p className="autosend-hint">
-            Will auto-send at {formatTime12h(autoTime)} on weekdays. App must be running.
-          </p>
-        )}
-
-        {/* ── Notes ────────────────────────────────────────────────────────── */}
-        <div className="field">
-          <div className="notes-header">
-            <label htmlFor="notes">Notes</label>
-            <div className="preview-tabs">
-              <button
-                type="button"
-                className={`preview-tab${!previewMode ? ' active' : ''}`}
-                onClick={() => setPreviewMode(false)}
-              >Write</button>
-              <button
-                type="button"
-                className={`preview-tab${previewMode ? ' active' : ''}`}
-                onClick={() => setPreviewMode(true)}
-              >Preview</button>
-            </div>
-          </div>
-          <FormatToolbar textareaRef={textareaRef} value={notes} onChange={v => { setNotes(v); debouncedSave(date, v) }} />
-          {previewMode ? (
-            <div
-              className="tg-preview"
-              dangerouslySetInnerHTML={{ __html: notes.trim()
-                ? `<span class="tg-preview-header"><b><u>EOD Summary - ${formatDateDisplay(date)}</u></b></span>\n\n${notes}`
-                : '<span class="tg-preview-empty">Nothing to preview yet…</span>'
-              }}
-            />
-          ) : (
-            <textarea
-              id="notes"
-              ref={textareaRef}
-              value={notes}
-              onChange={handleNotesChange}
-              onKeyDown={handleNotesKeyDown}
-              placeholder="Write your end-of-day notes here…"
-              rows={13}
-              spellCheck={true}
-            />
-          )}
-        </div>
-
-        {/* ── Status ───────────────────────────────────────────────────────── */}
-        {status && (
-          <div className={`status-bar status-${status.type}`} role="alert">
-            <span className="status-icon">
-              {status.type === 'success' ? '✓' : status.type === 'error' ? '✕' : 'i'}
+        {/* ── New-day wake banner ────────────────────────────────────────────── */}
+        {pendingDayChange && (
+          <div className="new-day-banner">
+            <span className="new-day-text">
+              New day: <strong>{formatDateDisplay(pendingDayChange)}</strong>
             </span>
-            {status.message}
+            <button className="btn btn-primary btn-sm" onClick={handleAcceptNewDay}>
+              Update date
+            </button>
+            <button className="btn-dismiss" onClick={() => setPendingDayChange(null)} title="Dismiss">✕</button>
           </div>
         )}
 
-        {/* ── Actions ──────────────────────────────────────────────────────── */}
-        <div className="actions">
-          <button className="btn btn-ghost" onClick={handleCopy}>Copy</button>
-          {justSubmitted && (
-            <button className="btn btn-outline" onClick={handleClear}>Clear for next day</button>
-          )}
-          {status?.type === 'error' && !justSubmitted && (
-            <button className="btn btn-outline" onClick={handleSubmit} disabled={submitting}>
-              {submitting ? 'Retrying…' : 'Retry'}
-            </button>
-          )}
-          <button className="btn btn-primary" onClick={handleSubmit} disabled={submitting}>
-            {submitting ? 'Sending…' : 'Submit EOD'}
+        {/* ── Top-level tabs ────────────────────────────────────────────────── */}
+        <div className="section-tabs">
+          <button
+            type="button"
+            className={`section-tab${activeTab === 'eod' ? ' active' : ''}`}
+            onClick={() => setActiveTab('eod')}
+          >EOD</button>
+          <button
+            type="button"
+            className={`section-tab${activeTab === 'notes' ? ' active' : ''}`}
+            onClick={() => setActiveTab('notes')}
+          >Notes</button>
+          <button
+            type="button"
+            className={`section-tab${activeTab === 'checklist' ? ' active' : ''}`}
+            onClick={() => setActiveTab('checklist')}
+          >
+            Checklist
+            {pendingItems > 0 && (
+              <span className="tab-badge">{pendingItems}</span>
+            )}
           </button>
         </div>
 
-        {/* ── History ──────────────────────────────────────────────────────── */}
-        <section className="history-section">
-          <button
-            className="history-toggle"
-            onClick={() => setShowHistory(v => !v)}
-            aria-expanded={showHistory}
-          >
-            <span>Previous submissions</span>
-            <span className="history-count">{history.length}</span>
-            <span className="history-chevron">{showHistory ? '▲' : '▼'}</span>
-          </button>
+        {/* ══ EOD tab ══════════════════════════════════════════════════════════ */}
+        {activeTab === 'eod' && (
+          <>
+            {/* Date field */}
+            <div className="field field-date">
+              <label htmlFor="date">Date</label>
+              <input type="date" id="date" value={date} onChange={handleDateChange} />
+            </div>
 
-          {showHistory && (
-            <div className="history-list">
-              {history.length === 0 ? (
-                <p className="history-empty">No submissions yet.</p>
+            {/* Auto-send row */}
+            <div className="autosend-row">
+              <label className="toggle-label">
+                <input
+                  type="checkbox"
+                  checked={autoEnabled}
+                  onChange={e => setAutoEnabled(e.target.checked)}
+                />
+                <span className="toggle-track"><span className="toggle-thumb" /></span>
+                <span className="toggle-text">Auto-send</span>
+              </label>
+              <input
+                type="time"
+                className="time-input"
+                value={autoTime}
+                onChange={e => setAutoTime(e.target.value)}
+                disabled={!autoEnabled}
+              />
+              <button className="btn btn-ghost btn-sm" onClick={handleSaveSettings}>
+                {settingsSaved ? 'Saved ✓' : 'Save'}
+              </button>
+            </div>
+
+            {autoEnabled && (
+              <p className="autosend-hint">
+                Will auto-send at {formatTime12h(autoTime)} on weekdays. App must be running.
+              </p>
+            )}
+
+            {/* EOD notes editor */}
+            <div className="field">
+              <div className="notes-header">
+                <label htmlFor="eod-notes">Report</label>
+                <div className="preview-tabs">
+                  <button
+                    type="button"
+                    className={`preview-tab${!previewMode ? ' active' : ''}`}
+                    onClick={() => setPreviewMode(false)}
+                  >Write</button>
+                  <button
+                    type="button"
+                    className={`preview-tab${previewMode ? ' active' : ''}`}
+                    onClick={() => setPreviewMode(true)}
+                  >Preview</button>
+                </div>
+              </div>
+              <FormatToolbar
+                textareaRef={eodTextareaRef}
+                value={eodNotes}
+                onChange={v => { setEodNotes(v); debouncedSave(date, v, personalNotes) }}
+              />
+              {previewMode ? (
+                <div
+                  className="tg-preview"
+                  dangerouslySetInnerHTML={{ __html: eodNotes.trim()
+                    ? `<span class="tg-preview-header"><b><u>EOD Summary - ${formatDateDisplay(date)}</u></b></span>\n\n${eodNotes}`
+                    : '<span class="tg-preview-empty">Nothing to preview yet…</span>'
+                  }}
+                />
               ) : (
-                [...history].reverse().map((item, i) => (
-                  <div key={i} className="history-item">
-                    <div className="history-item-header">
-                      <span className="history-item-date">{formatDateDisplay(item.date)}</span>
-                      <span className="history-item-meta">
-                        {item.auto && <span className="badge-auto">Auto</span>}
-                        {new Date(item.submittedAt).toLocaleTimeString()}
-                        <button
-                          className="btn-delete"
-                          onClick={() => handleDeleteHistory(i)}
-                          title="Delete this entry"
-                        >✕</button>
-                      </span>
-                    </div>
-                    <pre className="history-item-notes">{item.notes}</pre>
-                  </div>
-                ))
+                <textarea
+                  id="eod-notes"
+                  ref={eodTextareaRef}
+                  value={eodNotes}
+                  onChange={handleEodNotesChange}
+                  onKeyDown={handleEodNotesKeyDown}
+                  placeholder="Write your end-of-day report here…"
+                  rows={13}
+                  spellCheck={true}
+                />
               )}
             </div>
-          )}
-        </section>
+
+            {/* Status */}
+            {status && (
+              <div className={`status-bar status-${status.type}`} role="alert">
+                <span className="status-icon">
+                  {status.type === 'success' ? '✓' : status.type === 'error' ? '✕' : 'i'}
+                </span>
+                {status.message}
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="actions">
+              <button className="btn btn-ghost" onClick={handleCopy}>Copy</button>
+              {justSubmitted && (
+                <button className="btn btn-outline" onClick={handleClear}>Clear for next day</button>
+              )}
+              {status?.type === 'error' && !justSubmitted && (
+                <button className="btn btn-outline" onClick={handleSubmit} disabled={submitting}>
+                  {submitting ? 'Retrying…' : 'Retry'}
+                </button>
+              )}
+              <button className="btn btn-primary" onClick={handleSubmit} disabled={submitting}>
+                {submitting ? 'Sending…' : 'Submit EOD'}
+              </button>
+            </div>
+
+            {/* History */}
+            <section className="history-section">
+              <button
+                className="history-toggle"
+                onClick={() => setShowHistory(v => !v)}
+                aria-expanded={showHistory}
+              >
+                <span>Previous submissions</span>
+                <span className="history-count">{history.length}</span>
+                <span className="history-chevron">{showHistory ? '▲' : '▼'}</span>
+              </button>
+
+              {showHistory && (
+                <div className="history-list">
+                  {history.length === 0 ? (
+                    <p className="history-empty">No submissions yet.</p>
+                  ) : (
+                    [...history].reverse().map((item, i) => (
+                      <div key={i} className="history-item">
+                        <div className="history-item-header">
+                          <span className="history-item-date">{formatDateDisplay(item.date)}</span>
+                          <span className="history-item-meta">
+                            {item.auto && <span className="badge-auto">Auto</span>}
+                            {new Date(item.submittedAt).toLocaleTimeString()}
+                            <button
+                              className="btn-delete"
+                              onClick={() => handleDeleteHistory(i)}
+                              title="Delete this entry"
+                            >✕</button>
+                          </span>
+                        </div>
+                        <pre className="history-item-notes">{item.notes}</pre>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </section>
+          </>
+        )}
+
+        {/* ══ Notes tab ════════════════════════════════════════════════════════ */}
+        {activeTab === 'notes' && (
+          <div className="field">
+            <label htmlFor="personal-notes">Notes</label>
+            <textarea
+              id="personal-notes"
+              value={personalNotes}
+              onChange={handlePersonalNotesChange}
+              placeholder="Write anything here — this is your personal scratchpad and is never submitted."
+              rows={18}
+              spellCheck={true}
+            />
+          </div>
+        )}
+
+        {/* ══ Checklist tab ════════════════════════════════════════════════════ */}
+        {activeTab === 'checklist' && (
+          <div className="checklist-section">
+            <div className="checklist-add">
+              <input
+                type="text"
+                className="checklist-input"
+                placeholder="Add a task…"
+                value={newItem}
+                onChange={e => setNewItem(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addChecklistItem() } }}
+                autoFocus
+              />
+              <button className="btn btn-primary btn-sm" onClick={addChecklistItem}>Add</button>
+            </div>
+            {checklist.length === 0 ? (
+              <p className="checklist-empty">No tasks yet. Type above and press Enter or click Add.</p>
+            ) : (
+              <ul className="checklist-items">
+                {checklist.map(item => (
+                  <li key={item.id} className={`checklist-item${item.checked ? ' checked' : ''}`}>
+                    <div className="checklist-item-row">
+                      <input
+                        type="checkbox"
+                        checked={item.checked}
+                        onChange={() => toggleChecklistItem(item.id)}
+                        className="checklist-checkbox"
+                      />
+                      <input
+                        type="text"
+                        className="checklist-item-text"
+                        value={item.text}
+                        onChange={e => updateChecklistItemText(item.id, e.target.value)}
+                      />
+                      <button
+                        className="btn-delete"
+                        onClick={() => deleteChecklistItem(item.id)}
+                        title="Delete"
+                      >✕</button>
+                    </div>
+                    {item.checked && (
+                      <div className="checklist-detail-area">
+                        <textarea
+                          className="checklist-detail-input"
+                          placeholder="Add detail (optional)…"
+                          value={item.detail || ''}
+                          onChange={e => updateChecklistItemDetail(item.id, e.target.value)}
+                          rows={2}
+                          onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addToEod(item) } }}
+                        />
+                        <button
+                          className={`btn btn-sm ${justAddedToEod.has(item.id) ? 'btn-ghost' : 'btn-outline'}`}
+                          onClick={() => addToEod(item)}
+                        >
+                          {justAddedToEod.has(item.id) ? 'Added to EOD ✓' : 'Add to EOD'}
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
       </main>
     </div>

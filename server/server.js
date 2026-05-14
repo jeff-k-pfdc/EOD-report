@@ -57,10 +57,15 @@ app.post('/api/login', (req, res) => {
 app.get('/api/draft', (_req, res) => res.json(storage.getDraft() ?? {}))
 
 app.post('/api/draft', (req, res) => {
-  const { date, notes } = req.body
+  const { date, notes, personalNotes, checklist } = req.body
   if (typeof date !== 'string' || typeof notes !== 'string')
     return res.status(400).json({ error: 'Invalid payload.' })
-  storage.saveDraft({ date, notes })
+  storage.saveDraft({
+    date,
+    notes,
+    personalNotes: typeof personalNotes === 'string' ? personalNotes : '',
+    checklist: Array.isArray(checklist) ? checklist : [],
+  })
   res.json({ ok: true })
 })
 
@@ -87,6 +92,10 @@ app.post('/api/submit', async (req, res) => {
   if (!notes?.trim()) return res.status(400).json({ error: 'Notes cannot be empty.' })
   if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID)
     return res.status(500).json({ error: 'Telegram credentials missing. Check your .env file.' })
+
+  const existing = storage.getHistory()
+  if (existing.some(entry => entry.date === date))
+    return res.status(409).json({ error: `Already submitted EOD for ${date}. Use "Clear for next day" to start fresh.`, duplicate: true })
 
   try {
     await sendToTelegram(date, notes)
