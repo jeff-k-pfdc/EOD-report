@@ -1,5 +1,5 @@
 import cron from 'node-cron'
-import { getDraft, getSettings, addHistory, clearDraft } from './storage.js'
+import { getDraft, getHistory, getSettings, addHistory, clearDraft } from './storage.js'
 import { sendToTelegram } from './telegram.js'
 
 let currentTask = null
@@ -23,6 +23,12 @@ export function scheduleAutoSend() {
   currentTask = cron.schedule(`${minute} ${hour} * * 1-5`, async () => {
     const draft = getDraft()
     if (!draft?.notes?.trim()) return
+
+    const history = getHistory()
+    if (history.some(entry => entry.date === draft.date)) {
+      console.log(`[Scheduler] Skipping auto-send: already submitted for ${draft.date}`)
+      return
+    }
 
     if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) {
       console.warn('[Scheduler] Telegram credentials missing.')
