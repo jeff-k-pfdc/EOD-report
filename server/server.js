@@ -57,13 +57,14 @@ app.post('/api/login', (req, res) => {
 app.get('/api/draft', (_req, res) => res.json(storage.getDraft() ?? {}))
 
 app.post('/api/draft', (req, res) => {
-  const { date, notes, personalNotes, checklist } = req.body
+  const { date, notes, notesTabs, activeNoteId, checklist } = req.body
   if (typeof date !== 'string' || typeof notes !== 'string')
     return res.status(400).json({ error: 'Invalid payload.' })
   storage.saveDraft({
     date,
     notes,
-    personalNotes: typeof personalNotes === 'string' ? personalNotes : '',
+    notesTabs: Array.isArray(notesTabs) ? notesTabs : [],
+    activeNoteId: typeof activeNoteId === 'string' ? activeNoteId : null,
     checklist: Array.isArray(checklist) ? checklist : [],
   })
   res.json({ ok: true })
