@@ -30,6 +30,18 @@ function writeJSON(filePath, data) {
 const getDraft     = ()  => readJSON(draftPath(), null)
 const saveDraft    = (d) => writeJSON(draftPath(), d)
 const clearDraft   = ()  => { try { fs.unlinkSync(draftPath()) } catch {} }
+
+// Clears only EOD fields; preserves notesTabs and checklist
+function resetEodFields() {
+  const cur = getDraft()
+  saveDraft({
+    date:         new Date().toISOString().split('T')[0],
+    notes:        '',
+    notesTabs:    Array.isArray(cur?.notesTabs)         ? cur.notesTabs    : [],
+    activeNoteId: typeof cur?.activeNoteId === 'string' ? cur.activeNoteId : null,
+    checklist:    Array.isArray(cur?.checklist)         ? cur.checklist    : [],
+  })
+}
 const getHistory   = ()  => readJSON(historyPath(), [])
 const saveHistory  = (h) => writeJSON(historyPath(), h)
 const getSettings  = ()  => readJSON(settingsPath(), { autoSendEnabled: false, autoSendTime: '17:00' })
@@ -109,7 +121,7 @@ function scheduleAutoSend() {
     try {
       await sendToTelegram(draft.date, draft.notes)
       addHistory({ date: draft.date, notes: draft.notes, submittedAt: new Date().toISOString(), auto: true })
-      clearDraft()
+      resetEodFields()
     } catch (err) {
       console.error('[Scheduler]', err.message)
     }
@@ -172,7 +184,7 @@ ipcMain.handle('submit', async (_, date, notes) => {
     throw new Error(`Already submitted EOD for ${date}. Use "Clear for next day" to start fresh.`)
   await sendToTelegram(date, notes)
   addHistory({ date, notes, submittedAt: new Date().toISOString() })
-  clearDraft()
+  resetEodFields()
   return { ok: true }
 })
 

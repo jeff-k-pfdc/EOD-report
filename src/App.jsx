@@ -497,13 +497,19 @@ export default function App() {
   }
 
   const handleClear = async () => {
+    const today = todayString()
     setEodNotes('')
-    setDate(todayString())
-    setChecklist([])
-    checklistRef.current = []
+    setDate(today)
     setStatus(null)
     setJustSubmitted(false)
-    await window.api.clearDraft().catch(() => {})
+    try {
+      await window.api.saveDraft({
+        date: today, notes: '',
+        notesTabs:    notesTabsRef.current,
+        activeNoteId: activeNoteIdRef.current,
+        checklist:    checklistRef.current,
+      })
+    } catch {}
   }
 
   const handleAcceptNewDay = () => {
